@@ -111,6 +111,7 @@ public class FvmFacadeImpl implements FvmFacade {
 
     @Override
     public <S> Set<S> post(TransitionSystem<S, ?, ?> ts, S s) {
+        ValidateState(ts, s);
         Set<S> results = new HashSet<>();
         for (Transition<S, ?> t : ts.getTransitions()) {
             if (t.getFrom().equals(s))
@@ -121,6 +122,7 @@ public class FvmFacadeImpl implements FvmFacade {
 
     @Override
     public <S> Set<S> post(TransitionSystem<S, ?, ?> ts, Set<S> c) {
+        ValidateStates(ts, c);
         Set<S> results = new HashSet<>();
         for (S s : c)
             results.addAll(post(ts, s));
@@ -130,6 +132,8 @@ public class FvmFacadeImpl implements FvmFacade {
 
     @Override
     public <S, A> Set<S> post(TransitionSystem<S, A, ?> ts, S s, A a) {
+        ValidateState(ts, s);
+        ValidateAction(ts, a);
         Set<S> results = new HashSet<>();
         for (Transition<S, ?> t : ts.getTransitions()) {
             if (t.getFrom().equals(s) && t.getAction().equals(a))
@@ -140,6 +144,8 @@ public class FvmFacadeImpl implements FvmFacade {
 
     @Override
     public <S, A> Set<S> post(TransitionSystem<S, A, ?> ts, Set<S> c, A a) {
+        ValidateStates(ts, c);
+        ValidateAction(ts, a);
         Set<S> results = new HashSet<>();
         for (S s : c)
             results.addAll(post(ts, s, a));
@@ -149,6 +155,7 @@ public class FvmFacadeImpl implements FvmFacade {
 
     @Override
     public <S> Set<S> pre(TransitionSystem<S, ?, ?> ts, S s) {
+        ValidateState(ts, s);
         Set<S> results = new HashSet<>();
         for (Transition<S, ?> t : ts.getTransitions()) {
             if (t.getTo().equals(s))
@@ -159,6 +166,7 @@ public class FvmFacadeImpl implements FvmFacade {
 
     @Override
     public <S> Set<S> pre(TransitionSystem<S, ?, ?> ts, Set<S> c) {
+        ValidateStates(ts, c);
         Set<S> results = new HashSet<>();
         for (S s : c)
             results.addAll(pre(ts, s));
@@ -168,6 +176,8 @@ public class FvmFacadeImpl implements FvmFacade {
 
     @Override
     public <S, A> Set<S> pre(TransitionSystem<S, A, ?> ts, S s, A a) {
+        ValidateState(ts, s);
+        ValidateAction(ts, a);
         Set<S> results = new HashSet<>();
         for (Transition<S, ?> t : ts.getTransitions()) {
             if (t.getTo().equals(s) && t.getAction().equals(a))
@@ -178,6 +188,8 @@ public class FvmFacadeImpl implements FvmFacade {
 
     @Override
     public <S, A> Set<S> pre(TransitionSystem<S, A, ?> ts, Set<S> c, A a) {
+        ValidateStates(ts, c);
+        ValidateAction(ts, a);
         Set<S> results = new HashSet<>();
         for (S s : c)
             results.addAll(pre(ts, s, a));
