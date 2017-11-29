@@ -5,6 +5,7 @@ import il.ac.bgu.cs.fvm.automata.Automaton;
 import il.ac.bgu.cs.fvm.automata.MultiColorAutomaton;
 import il.ac.bgu.cs.fvm.channelsystem.ChannelSystem;
 import il.ac.bgu.cs.fvm.circuits.Circuit;
+import il.ac.bgu.cs.fvm.exceptions.ActionNotFoundException;
 import il.ac.bgu.cs.fvm.exceptions.StateNotFoundException;
 import il.ac.bgu.cs.fvm.ltl.LTL;
 import il.ac.bgu.cs.fvm.programgraph.ActionDef;
@@ -24,6 +25,19 @@ import java.util.*;
  * sub-packages.
  */
 public class FvmFacadeImpl implements FvmFacade {
+
+    private <S> void ValidateState(TransitionSystem<S, ?, ?> ts, S s) {
+        if (!ts.getStates().contains(s)) throw new StateNotFoundException(s);
+    }
+    private <S> void ValidateStates(TransitionSystem<S, ?, ?> ts, Set<S> ss) {
+        for (S s : ss) ValidateState(ts, s);
+    }
+    private <A> void ValidateAction(TransitionSystem<?, A, ?> ts, A a) {
+        if (!ts.getActions().contains(a)) throw new ActionNotFoundException(a);
+    }
+    private <A> void ValidateActions(TransitionSystem<?, A, ?> ts, Set<A> as) {
+        for (A a : as) ValidateAction(ts, a);
+    }
 
     @Override
     public <S, A, P> TransitionSystem<S, A, P> createTransitionSystem() {
@@ -56,29 +70,42 @@ public class FvmFacadeImpl implements FvmFacade {
 
     @Override
     public <S, A, P> boolean isExecution(TransitionSystem<S, A, P> ts, AlternatingSequence<S, A> e) {
-        throw new UnsupportedOperationException("Not supported yet."); // TODO: Implement isExecution
+        return isStateTerminal(ts, e.last()) && isInitialExecutionFragment(ts, e);
     }
 
     @Override
     public <S, A, P> boolean isExecutionFragment(TransitionSystem<S, A, P> ts, AlternatingSequence<S, A> e) {
-        throw new UnsupportedOperationException("Not supported yet."); // TODO: Implement isExecutionFragment
+        AlternatingSequence<S, A> restOfExecution = e;
+        Set<S> postStates = ts.getStates();
+
+        do {
+            S s = restOfExecution.head();
+            ValidateState(ts, s);
+
+            if (!postStates.contains(s)) return false;
+            if (restOfExecution.tail().isEmpty()) return true;
+
+            A a = restOfExecution.tail().head();
+            ValidateAction(ts, a);
+
+            postStates = post(ts, s, a);
+            restOfExecution = restOfExecution.tail().tail();
+        } while (true);
     }
 
     @Override
     public <S, A, P> boolean isInitialExecutionFragment(TransitionSystem<S, A, P> ts, AlternatingSequence<S, A> e) {
-        throw new UnsupportedOperationException("Not supported yet."); // TODO: Implement isInitialExecutionFragment
+        return ts.getInitialStates().contains(e.head()) && isExecutionFragment(ts, e);
     }
 
     @Override
     public <S, A, P> boolean isMaximalExecutionFragment(TransitionSystem<S, A, P> ts, AlternatingSequence<S, A> e) {
-        throw new UnsupportedOperationException("Not supported yet."); // TODO: Implement isMaximalExecutionFragment
+        return isStateTerminal(ts, e.last()) && isExecutionFragment(ts, e);
     }
 
     @Override
     public <S, A> boolean isStateTerminal(TransitionSystem<S, A, ?> ts, S s) {
-        if (!ts.getStates().contains(s))
-            throw new StateNotFoundException(s);
-
+        ValidateState(ts, s);
         return post(ts, s).size() == 0;
     }
 

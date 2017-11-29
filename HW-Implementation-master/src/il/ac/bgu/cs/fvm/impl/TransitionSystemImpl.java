@@ -13,8 +13,7 @@ public class TransitionSystemImpl<STATE, ACTION, ATOMIC_PROPOSITION> implements 
     private Set<ACTION> actions;
     private Set<ATOMIC_PROPOSITION> aps;
     private Set<Transition<STATE, ACTION>> transitions;
-
-    private HashMap<STATE, Set<ATOMIC_PROPOSITION>> statesToLabels;
+    private HashMap<STATE, Set<ATOMIC_PROPOSITION>> labelingFunction;
 
     public TransitionSystemImpl() {
         this.name = null;
@@ -23,7 +22,7 @@ public class TransitionSystemImpl<STATE, ACTION, ATOMIC_PROPOSITION> implements 
         this.actions = new HashSet<>();
         this.aps = new HashSet<>();
         this.transitions = new HashSet<>();
-        this.statesToLabels = new HashMap<>();
+        this.labelingFunction = new HashMap<>();
     }
 
     @Override
@@ -40,7 +39,7 @@ public class TransitionSystemImpl<STATE, ACTION, ATOMIC_PROPOSITION> implements 
         if (actions != null ? !actions.equals(that.actions) : that.actions != null) return false;
         if (aps != null ? !aps.equals(that.aps) : that.aps != null) return false;
         if (transitions != null ? !transitions.equals(that.transitions) : that.transitions != null) return false;
-        return statesToLabels != null ? statesToLabels.equals(that.statesToLabels) : that.statesToLabels == null;
+        return labelingFunction != null ? labelingFunction.equals(that.labelingFunction) : that.labelingFunction == null;
     }
 
     @Override
@@ -51,7 +50,7 @@ public class TransitionSystemImpl<STATE, ACTION, ATOMIC_PROPOSITION> implements 
         result = 31 * result + (actions != null ? actions.hashCode() : 0);
         result = 31 * result + (aps != null ? aps.hashCode() : 0);
         result = 31 * result + (transitions != null ? transitions.hashCode() : 0);
-        result = 31 * result + (statesToLabels != null ? statesToLabels.hashCode() : 0);
+        result = 31 * result + (labelingFunction != null ? labelingFunction.hashCode() : 0);
         return result;
     }
 
@@ -81,7 +80,7 @@ public class TransitionSystemImpl<STATE, ACTION, ATOMIC_PROPOSITION> implements 
     @Override
     public void addState(STATE state) {
         this.states.add(state);
-        this.statesToLabels.put(state, new HashSet<>());
+        this.labelingFunction.put(state, new HashSet<>());
     }
 
     @Override
@@ -112,7 +111,7 @@ public class TransitionSystemImpl<STATE, ACTION, ATOMIC_PROPOSITION> implements 
         if (!this.aps.contains(l)) {
             throw new InvalidLablingPairException(s, l);
         }
-        else this.statesToLabels.get(s).add(l);
+        else this.labelingFunction.get(s).add(l);
     }
 
     @Override
@@ -120,7 +119,7 @@ public class TransitionSystemImpl<STATE, ACTION, ATOMIC_PROPOSITION> implements 
         if (!states.contains(s))
             throw new StateNotFoundException(String.format("state %s not found (getLabel)", s));
 
-        return this.statesToLabels.get(s);
+        return this.labelingFunction.get(s);
     }
 
     @Override
@@ -130,7 +129,7 @@ public class TransitionSystemImpl<STATE, ACTION, ATOMIC_PROPOSITION> implements 
 
     @Override
     public Map<STATE, Set<ATOMIC_PROPOSITION>> getLabelingFunction() {
-        return this.statesToLabels;
+        return this.labelingFunction;
     }
 
     @Override
@@ -154,8 +153,8 @@ public class TransitionSystemImpl<STATE, ACTION, ATOMIC_PROPOSITION> implements 
     @Override
     public void removeAtomicProposition(ATOMIC_PROPOSITION p) throws FVMException {
         for (STATE s : this.states)
-            if (statesToLabels.get(s).contains(p))
-                throw new DeletionOfAttachedAtomicPropositionException(p, TransitionSystemPart.ATOMIC_PROPOSITIONS);
+            if (labelingFunction.get(s).contains(p))
+                throw new DeletionOfAttachedAtomicPropositionException(p, TransitionSystemPart.LABELING_FUNCTION);
         this.aps.remove(p);
     }
 
@@ -166,7 +165,7 @@ public class TransitionSystemImpl<STATE, ACTION, ATOMIC_PROPOSITION> implements 
 
     @Override
     public void removeLabel(STATE s, ATOMIC_PROPOSITION l) {
-        this.statesToLabels.get(s).remove(l);
+        this.labelingFunction.get(s).remove(l);
     }
 
     @Override
@@ -174,7 +173,7 @@ public class TransitionSystemImpl<STATE, ACTION, ATOMIC_PROPOSITION> implements 
         if (initialStates.contains(state))
             throw new DeletionOfAttachedStateException(state, TransitionSystemPart.INITIAL_STATES);
 
-        if (!statesToLabels.get(state).isEmpty())
+        if (!labelingFunction.get(state).isEmpty())
             throw new DeletionOfAttachedStateException(state, TransitionSystemPart.LABELING_FUNCTION);
 
         for (Transition t : transitions) {
@@ -188,6 +187,5 @@ public class TransitionSystemImpl<STATE, ACTION, ATOMIC_PROPOSITION> implements 
     public void removeTransition(Transition<STATE, ACTION> t) {
         this.transitions.remove(t);
     }
-
 
 }
