@@ -16,8 +16,14 @@ import il.ac.bgu.cs.fvm.transitionsystem.Transition;
 import il.ac.bgu.cs.fvm.transitionsystem.TransitionSystem;
 import il.ac.bgu.cs.fvm.util.Pair;
 import il.ac.bgu.cs.fvm.verification.VerificationResult;
+
+import javax.lang.model.type.UnionType;
 import java.io.InputStream;
 import java.util.*;
+
+import static il.ac.bgu.cs.fvm.impl.util.difference;
+import static il.ac.bgu.cs.fvm.impl.util.setProduct;
+import static il.ac.bgu.cs.fvm.impl.util.union;
 
 /**
  * Implement the methods in this class. You may add additional classes as you
@@ -211,12 +217,36 @@ public class FvmFacadeImpl implements FvmFacade {
 
     @Override
     public <S1, S2, A, P> TransitionSystem<Pair<S1, S2>, A, P> interleave(TransitionSystem<S1, A, P> ts1, TransitionSystem<S2, A, P> ts2) {
-        throw new UnsupportedOperationException("Not supported yet."); // TODO: Implement interleave
+        return interleave(ts1, ts2, new HashSet<>());
     }
 
     @Override
     public <S1, S2, A, P> TransitionSystem<Pair<S1, S2>, A, P> interleave(TransitionSystem<S1, A, P> ts1, TransitionSystem<S2, A, P> ts2, Set<A> handShakingActions) {
-        throw new UnsupportedOperationException("Not supported yet."); // TODO: Implement interleave
+        TransitionSystem<Pair<S1, S2>, A, P> result = createTransitionSystem();
+
+        result.addAllActions(union(ts1.getActions(), ts2.getActions()));
+        result.addAllAtomicPropositions(union(ts1.getAtomicPropositions(), ts2.getAtomicPropositions()));
+        result.addAllStates(setProduct(ts1.getStates(), ts2.getStates()));
+        for (Pair<S1, S2> s : setProduct(ts1.getInitialStates(), ts2.getInitialStates()))
+            result.addInitialState(s);
+
+        Set<A> nonHandshake1 = difference(ts1.getActions(), handShakingActions);
+        Set<A> nonHandshake2 = difference(ts2.getActions(), handShakingActions);
+        for (Pair<S1, S2> s : result.getStates()) {
+            for (A a : handShakingActions) {
+                Set<S1> s1Post = post(ts1, s.first, a);
+                Set<S2> s2Post = post(ts2, s.second, a);
+                for (Pair<S1, S2> postState : setProduct(s1Post, s2Post))
+                    result.addTransition(new Transition<>(s, a, postState));
+            }
+            for (A a : nonHandshake1)
+                for (S1 sPost : post(ts1, s.first, a))
+                    result.addTransition(new Transition<>(s, a, new Pair<>(sPost, s.second)));
+            for (A a : nonHandshake2)
+                for (S2 sPost : post(ts2, s.second, a))
+                    result.addTransition(new Transition<>(s, a, new Pair<>(s.first, sPost)));
+        }
+        return result;
     }
 
     @Override
