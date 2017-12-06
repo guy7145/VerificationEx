@@ -10,6 +10,7 @@ import il.ac.bgu.cs.fvm.exceptions.StateNotFoundException;
 import il.ac.bgu.cs.fvm.ltl.LTL;
 import il.ac.bgu.cs.fvm.programgraph.ActionDef;
 import il.ac.bgu.cs.fvm.programgraph.ConditionDef;
+import il.ac.bgu.cs.fvm.programgraph.PGTransition;
 import il.ac.bgu.cs.fvm.programgraph.ProgramGraph;
 import il.ac.bgu.cs.fvm.transitionsystem.AlternatingSequence;
 import il.ac.bgu.cs.fvm.transitionsystem.Transition;
@@ -17,13 +18,16 @@ import il.ac.bgu.cs.fvm.transitionsystem.TransitionSystem;
 import il.ac.bgu.cs.fvm.util.Pair;
 import il.ac.bgu.cs.fvm.verification.VerificationResult;
 
-import javax.lang.model.type.UnionType;
 import java.io.InputStream;
 import java.util.*;
 
-import static il.ac.bgu.cs.fvm.impl.util.difference;
-import static il.ac.bgu.cs.fvm.impl.util.setProduct;
-import static il.ac.bgu.cs.fvm.impl.util.union;
+import static il.ac.bgu.cs.fvm.impl.AddAllUtils.*;
+import static il.ac.bgu.cs.fvm.impl.CircuitUtils.allOff;
+import static il.ac.bgu.cs.fvm.impl.CircuitUtils.allPermutations;
+import static il.ac.bgu.cs.fvm.impl.CircuitUtils.getTrueNames;
+import static il.ac.bgu.cs.fvm.impl.SetUtils.difference;
+import static il.ac.bgu.cs.fvm.impl.SetUtils.setProduct;
+import static il.ac.bgu.cs.fvm.impl.SetUtils.union;
 
 /**
  * Implement the methods in this class. You may add additional classes as you
@@ -251,17 +255,100 @@ public class FvmFacadeImpl implements FvmFacade {
 
     @Override
     public <L, A> ProgramGraph<L, A> createProgramGraph() {
-        throw new UnsupportedOperationException("Not supported yet."); // TODO: Implement createProgramGraph
+        return new ProgramGraphImpl<L, A>();
     }
 
     @Override
     public <L1, L2, A> ProgramGraph<Pair<L1, L2>, A> interleave(ProgramGraph<L1, A> pg1, ProgramGraph<L2, A> pg2) {
-        throw new UnsupportedOperationException("Not supported yet."); // TODO: Implement interleave
+        ProgramGraph<Pair<L1, L2>, A> result = createProgramGraph();
+        addAllLocationsPG(result, setProduct(pg1.getLocations(), pg2.getLocations()));
+        addAllInitialLocationsPG(result, setProduct(pg1.getInitialLocations(), pg2.getInitialLocations()));
+        Set<List<String>> initProducts = new HashSet<>();
+        for (Pair<List<String>, List<String>> initPair : setProduct(pg1.getInitalizations(), pg2.getInitalizations())) {
+            List<String> initProd = new LinkedList<>();
+            initProd.addAll(initPair.first);
+            initProd.addAll(initPair.second);
+            initProducts.add(initProd);
+        }
+        addAllInitializationsPG(result, initProducts);
+
+        for (L1 l1 : pg1.getLocations()) {
+            System.out.println(pg2.getTransitions());
+            for (PGTransition<L2, A> t : pg2.getTransitions())
+                result.addTransition(
+                        new PGTransition<Pair<L1, L2>, A>(
+                                new Pair<>(l1, t.getFrom()),
+                                t.getCondition(),
+                                t.getAction(),
+                                new Pair<>(l1, t.getTo())
+                        )
+                );
+        }
+        for (L2 l2 : pg2.getLocations())
+            for (PGTransition<L1, A> t : pg1.getTransitions())
+                result.addTransition(
+                        new PGTransition<Pair<L1, L2>, A>(
+                                new Pair<>(t.getFrom(), l2),
+                                t.getCondition(),
+                                t.getAction(),
+                                new Pair<>(t.getTo(), l2)
+                        )
+                );
+
+
+        return result;
     }
 
     @Override
     public TransitionSystem<Pair<Map<String, Boolean>, Map<String, Boolean>>, Map<String, Boolean>, Object> transitionSystemFromCircuit(Circuit c) {
-        throw new UnsupportedOperationException("Not supported yet."); // TODO: Implement transitionSystemFromCircuit
+        TransitionSystem<Pair<Map<String, Boolean>, Map<String, Boolean>>, Map<String, Boolean>, Object> ts = createTransitionSystem();
+
+        /* auxiliary variable */
+        Set<Map<String, Boolean>> allInputPermutations = allPermutations(c.getInputPortNames());
+        /* actions */
+        ts.addAllActions(allInputPermutations);
+        /* initialize initial states */
+        Set<Pair<Map<String, Boolean>, Map<String, Boolean>>> initialStates = new HashSet<>();
+        Map<String, Boolean> registersOff = allOff(c.getRegisterNames());
+        for (Map<String, Boolean> perm : allInputPermutations)
+            initialStates.add(new Pair<>(perm, registersOff));
+
+
+        /* only reachable states */
+        Set<Pair<Map<String, Boolean>, Map<String, Boolean>>> currentStates = initialStates;
+        Set<Pair<Map<String, Boolean>, Map<String, Boolean>>> post = new HashSet<>();
+        do {
+            ts.addAllStates(currentStates);
+
+            for (Pair<Map<String, Boolean>, Map<String, Boolean>> s : currentStates)
+                for (Map<String, Boolean> action : ts.getActions())
+                    post.add(new Pair<>(action, c.updateRegisters(s.first, s.second)));
+
+            currentStates = difference(post, ts.getStates());
+            post = new HashSet<>();
+        } while (!currentStates.isEmpty());
+        for (Pair<Map<String, Boolean>, Map<String, Boolean>> s : initialStates)
+            ts.addInitialState(s);
+
+        /* transitions */
+        for (Pair<Map<String, Boolean>, Map<String, Boolean>> s : ts.getStates())
+            for (Map<String, Boolean> act : ts.getActions())
+                ts.addTransition(new Transition<>(s, act, new Pair<>(act, c.updateRegisters(s.first, s.second))));
+
+        /* labels and atomic-propositions */
+        for (String x : union(c.getInputPortNames(), c.getRegisterNames(), c.getOutputPortNames()))
+            ts.addAtomicProposition(x);
+
+        for (Pair<Map<String, Boolean>, Map<String, Boolean>> s : ts.getStates()) {
+            Set<String> label = union(
+                    getTrueNames(c.computeOutputs(s.first, s.second)),
+                    getTrueNames(s.first),
+                    getTrueNames(s.second)
+            );
+            for (String p : label)
+                ts.addToLabel(s, p);
+        }
+        return ts;
     }
 
     @Override
