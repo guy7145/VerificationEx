@@ -2,10 +2,18 @@ package il.ac.bgu.cs.fvm.impl;
 
 import il.ac.bgu.cs.fvm.util.Pair;
 
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Set;
 
 public class SetUtils {
+    public static <X> Set<X> NewSet(X... xs) {
+        HashSet<X> set = new HashSet<>();
+        for (X x : xs)
+            set.add(x);
+        return set;
+    }
+
     public static <A, B> Set<Pair<A, B>> setProduct(Set<A> s1, Set<B> s2) {
         Set<Pair<A, B>> product = new HashSet<>();
         for (A a : s1)

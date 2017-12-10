@@ -25,9 +25,7 @@ import static il.ac.bgu.cs.fvm.impl.AddAllUtils.*;
 import static il.ac.bgu.cs.fvm.impl.CircuitUtils.allOff;
 import static il.ac.bgu.cs.fvm.impl.CircuitUtils.allPermutations;
 import static il.ac.bgu.cs.fvm.impl.CircuitUtils.getTrueNames;
-import static il.ac.bgu.cs.fvm.impl.SetUtils.difference;
-import static il.ac.bgu.cs.fvm.impl.SetUtils.setProduct;
-import static il.ac.bgu.cs.fvm.impl.SetUtils.union;
+import static il.ac.bgu.cs.fvm.impl.SetUtils.*;
 
 /**
  * Implement the methods in this class. You may add additional classes as you
@@ -226,31 +224,56 @@ public class FvmFacadeImpl implements FvmFacade {
 
     @Override
     public <S1, S2, A, P> TransitionSystem<Pair<S1, S2>, A, P> interleave(TransitionSystem<S1, A, P> ts1, TransitionSystem<S2, A, P> ts2, Set<A> handShakingActions) {
-        TransitionSystem<Pair<S1, S2>, A, P> result = createTransitionSystem();
+        TransitionSystem<Pair<S1, S2>, A, P> tsInterleaved = createTransitionSystem();
 
-        result.addAllActions(union(ts1.getActions(), ts2.getActions()));
-        result.addAllAtomicPropositions(union(ts1.getAtomicPropositions(), ts2.getAtomicPropositions()));
-        result.addAllStates(setProduct(ts1.getStates(), ts2.getStates()));
-        for (Pair<S1, S2> s : setProduct(ts1.getInitialStates(), ts2.getInitialStates()))
-            result.addInitialState(s);
+        /* APs, actions and initial states */
+        tsInterleaved.addAllActions(union(ts1.getActions(), ts2.getActions()));
+        tsInterleaved.addAllAtomicPropositions(union(ts1.getAtomicPropositions(), ts2.getAtomicPropositions()));
+        tsInterleaved.addAllStates(setProduct(ts1.getInitialStates(), ts2.getInitialStates()));
+        for (Pair<S1, S2> s : tsInterleaved.getStates())
+            tsInterleaved.addInitialState(s);
 
-        Set<A> nonHandshake1 = difference(ts1.getActions(), handShakingActions);
-        Set<A> nonHandshake2 = difference(ts2.getActions(), handShakingActions);
-        for (Pair<S1, S2> s : result.getStates()) {
-            for (A a : handShakingActions) {
-                Set<S1> s1Post = post(ts1, s.first, a);
-                Set<S2> s2Post = post(ts2, s.second, a);
-                for (Pair<S1, S2> postState : setProduct(s1Post, s2Post))
-                    result.addTransition(new Transition<>(s, a, postState));
+        /* states (reachable) and transitions */
+        Set<Pair<S1, S2>> currentStates = tsInterleaved.getInitialStates();
+        Set<Pair<S1, S2>> nextStates;
+        Set<A> nonHS1 = difference(ts1.getActions(), handShakingActions);
+        Set<A> nonHS2 = difference(ts2.getActions(), handShakingActions);
+        Set<Transition<Pair<S1, S2>, A>> currentTransitions;
+        do {
+            nextStates = new HashSet<>();
+            currentTransitions = new HashSet<>();
+            for (Pair<S1, S2> s : currentStates) {
+                for (A a : nonHS1)
+                    for (Pair<S1, S2> nextS : setProduct(post(ts1, s.first, a), NewSet(s.second))) {
+                        nextStates.add(nextS);
+                        currentTransitions.add(new Transition<>(s, a, nextS));
+                    }
+                for (A a : nonHS2)
+                    for (Pair<S1, S2> nextS : setProduct(NewSet(s.first), post(ts2, s.second, a))) {
+                        nextStates.add(nextS);
+                        currentTransitions.add(new Transition<>(s, a, nextS));
+                    }
+                for (A a : handShakingActions)
+                    for (Pair<S1, S2> nextS : setProduct(post(ts1, s.first, a), post(ts2, s.second, a))) {
+                        nextStates.add(nextS);
+                        currentTransitions.add(new Transition<>(s, a, nextS));
+                    }
             }
-            for (A a : nonHandshake1)
-                for (S1 sPost : post(ts1, s.first, a))
-                    result.addTransition(new Transition<>(s, a, new Pair<>(sPost, s.second)));
-            for (A a : nonHandshake2)
-                for (S2 sPost : post(ts2, s.second, a))
-                    result.addTransition(new Transition<>(s, a, new Pair<>(s.first, sPost)));
-        }
-        return result;
+            nextStates = difference(nextStates, tsInterleaved.getStates());
+            tsInterleaved.addAllStates(nextStates);
+            currentStates = nextStates;
+            nextStates = null;
+            for (Transition<Pair<S1, S2>, A> t : currentTransitions)
+                tsInterleaved.addTransition(t);
+            currentTransitions = null;
+        } while (!currentStates.isEmpty());
+
+        /* labels */
+        for (Pair<S1, S2> s : tsInterleaved.getStates())
+            for (P p : union(ts1.getLabel(s.first), ts2.getLabel(s.second)))
+                tsInterleaved.addToLabel(s, p);
+
+        return tsInterleaved;
     }
 
     @Override
