@@ -7,6 +7,7 @@ import java.util.HashSet;
 import java.util.Set;
 
 public class SetUtils {
+    @SafeVarargs
     public static <X> Set<X> NewSet(X... xs) {
         HashSet<X> set = new HashSet<>();
         for (X x : xs)

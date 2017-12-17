@@ -376,7 +376,61 @@ public class FvmFacadeImpl implements FvmFacade {
 
     @Override
     public <L, A> TransitionSystem<Pair<L, Map<String, Object>>, A, String> transitionSystemFromProgramGraph(ProgramGraph<L, A> pg, Set<ActionDef> actionDefs, Set<ConditionDef> conditionDefs) {
-        throw new UnsupportedOperationException("Not supported yet."); // TODO: Implement transitionSystemFromProgramGraph
+        TransitionSystem<Pair<L, Map<String, Object>>, A, String> ts = createTransitionSystem();
+        Map<String, Object> initialMemory = new HashMap<>();
+        /* initial memory mapping */
+        String[] init_as_array;
+        Set<Map<String, Object>> initialMemoryMaps = new HashSet<>();
+        for (List<String> initList : pg.getInitalizations()) {
+            Map<String, Object> mem = new HashMap<>();
+            for (String init : initList)
+                mem = ActionDef.effect(actionDefs, mem, init);
+            initialMemoryMaps.add(mem);
+        }
+        /* initial states */
+        for (Pair<L, Map<String, Object>> s : setProduct(pg.getInitialLocations(), initialMemoryMaps)) {
+            ts.addState(s);
+            ts.addInitialState(s);
+        }
+        /* rest states (reachable) */
+        Set<Pair<L, Map<String, Object>>> currentStates = ts.getInitialStates();
+        Set<Pair<L, Map<String, Object>>> nextStates;
+        Set<Transition<Pair<L, Map<String, Object>>, A>> transitions = new HashSet<>();
+        Map<L, Set<PGTransition<L, A>>> transitionsOfStates = new HashMap<>();
+        for (L l : pg.getLocations())
+            transitionsOfStates.put(l, new HashSet<>());
+        for (PGTransition<L, A> t : pg.getTransitions())
+            transitionsOfStates.get(t.getFrom()).add(t);
+        do {
+            nextStates = new HashSet<>();
+            for (Pair<L, Map<String, Object>> s : currentStates) {
+                for (PGTransition<L, A> t : transitionsOfStates.getOrDefault(s.first, new HashSet<>()))
+                    if (ConditionDef.evaluate(conditionDefs, s.second, t.getCondition())) {
+                        Pair<L, Map<String, Object>> dst = new Pair<>(t.getTo(), ActionDef.effect(actionDefs, s.second, t.getAction()));
+                        nextStates.add(dst);
+                        transitions.add(new Transition<>(s, t.getAction(), dst));
+                    }
+            }
+            nextStates = difference(nextStates, ts.getStates());
+            ts.addAllStates(nextStates);
+            currentStates = nextStates;
+        } while (!currentStates.isEmpty());
+        /* transitions and actions */
+        for (Transition<Pair<L, Map<String, Object>>, A> t : transitions) {
+            ts.addAction(t.getAction());
+            ts.addTransition(t);
+        }
+        /* aps and labels */
+        for (Pair<L, Map<String, Object>> s : ts.getStates()) {
+            ts.addAtomicProposition(s.first.toString());
+            ts.addToLabel(s, s.first.toString());
+            for (Map.Entry<String, Object> entry : s.second.entrySet()) {
+                String ap = String.format("%s = %s", entry.getKey(), entry.getValue().toString());
+                ts.addAtomicProposition(ap);
+                ts.addToLabel(s, ap);
+            }
+        }
+        return ts;
     }
 
     @Override
