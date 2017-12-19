@@ -23,6 +23,32 @@ public class ProgramGraphImpl<L, A> implements ProgramGraph<L, A> {
     }
 
     @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+
+        ProgramGraphImpl<?, ?> that = (ProgramGraphImpl<?, ?>) o;
+
+        if (name != null ? !name.equals(that.name) : that.name != null) return false;
+        if (locations != null ? !locations.equals(that.locations) : that.locations != null) return false;
+        if (initialLocations != null ? !initialLocations.equals(that.initialLocations) : that.initialLocations != null)
+            return false;
+        if (initializations != null ? !initializations.equals(that.initializations) : that.initializations != null)
+            return false;
+        return transitions != null ? transitions.equals(that.transitions) : that.transitions == null;
+    }
+
+    @Override
+    public int hashCode() {
+        int result = name != null ? name.hashCode() : 0;
+        result = 31 * result + (locations != null ? locations.hashCode() : 0);
+        result = 31 * result + (initialLocations != null ? initialLocations.hashCode() : 0);
+        result = 31 * result + (initializations != null ? initializations.hashCode() : 0);
+        result = 31 * result + (transitions != null ? transitions.hashCode() : 0);
+        return result;
+    }
+
+    @Override
     public void addInitalization(List<String> init) {
         this.initializations.add(init);
     }

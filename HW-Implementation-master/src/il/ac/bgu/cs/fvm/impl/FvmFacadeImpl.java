@@ -4,14 +4,13 @@ import il.ac.bgu.cs.fvm.FvmFacade;
 import il.ac.bgu.cs.fvm.automata.Automaton;
 import il.ac.bgu.cs.fvm.automata.MultiColorAutomaton;
 import il.ac.bgu.cs.fvm.channelsystem.ChannelSystem;
+import il.ac.bgu.cs.fvm.channelsystem.InterleavingActDef;
+import il.ac.bgu.cs.fvm.channelsystem.ParserBasedInterleavingActDef;
 import il.ac.bgu.cs.fvm.circuits.Circuit;
 import il.ac.bgu.cs.fvm.exceptions.ActionNotFoundException;
 import il.ac.bgu.cs.fvm.exceptions.StateNotFoundException;
 import il.ac.bgu.cs.fvm.ltl.LTL;
-import il.ac.bgu.cs.fvm.programgraph.ActionDef;
-import il.ac.bgu.cs.fvm.programgraph.ConditionDef;
-import il.ac.bgu.cs.fvm.programgraph.PGTransition;
-import il.ac.bgu.cs.fvm.programgraph.ProgramGraph;
+import il.ac.bgu.cs.fvm.programgraph.*;
 import il.ac.bgu.cs.fvm.transitionsystem.AlternatingSequence;
 import il.ac.bgu.cs.fvm.transitionsystem.Transition;
 import il.ac.bgu.cs.fvm.transitionsystem.TransitionSystem;
@@ -21,11 +20,12 @@ import il.ac.bgu.cs.fvm.verification.VerificationResult;
 import java.io.InputStream;
 import java.util.*;
 
-import static il.ac.bgu.cs.fvm.impl.AddAllUtils.*;
+import static il.ac.bgu.cs.fvm.impl.Utils.*;
 import static il.ac.bgu.cs.fvm.impl.CircuitUtils.allOff;
 import static il.ac.bgu.cs.fvm.impl.CircuitUtils.allPermutations;
 import static il.ac.bgu.cs.fvm.impl.CircuitUtils.getTrueNames;
 import static il.ac.bgu.cs.fvm.impl.SetUtils.*;
+import static il.ac.bgu.cs.fvm.impl.Utils.isSyncronizedChannelAction;
 
 /**
  * Implement the methods in this class. You may add additional classes as you
@@ -296,7 +296,6 @@ public class FvmFacadeImpl implements FvmFacade {
         addAllInitializationsPG(result, initProducts);
 
         for (L1 l1 : pg1.getLocations()) {
-            System.out.println(pg2.getTransitions());
             for (PGTransition<L2, A> t : pg2.getTransitions())
                 result.addTransition(
                         new PGTransition<Pair<L1, L2>, A>(
@@ -379,7 +378,6 @@ public class FvmFacadeImpl implements FvmFacade {
         TransitionSystem<Pair<L, Map<String, Object>>, A, String> ts = createTransitionSystem();
         Map<String, Object> initialMemory = new HashMap<>();
         /* initial memory mapping */
-        String[] init_as_array;
         Set<Map<String, Object>> initialMemoryMaps = new HashSet<>();
         for (List<String> initList : pg.getInitalizations()) {
             Map<String, Object> mem = new HashMap<>();
@@ -415,11 +413,13 @@ public class FvmFacadeImpl implements FvmFacade {
             ts.addAllStates(nextStates);
             currentStates = nextStates;
         } while (!currentStates.isEmpty());
+
         /* transitions and actions */
         for (Transition<Pair<L, Map<String, Object>>, A> t : transitions) {
             ts.addAction(t.getAction());
             ts.addTransition(t);
         }
+
         /* aps and labels */
         for (Pair<L, Map<String, Object>> s : ts.getStates()) {
             ts.addAtomicProposition(s.first.toString());
@@ -435,7 +435,233 @@ public class FvmFacadeImpl implements FvmFacade {
 
     @Override
     public <L, A> TransitionSystem<Pair<List<L>, Map<String, Object>>, A, String> transitionSystemFromChannelSystem(ChannelSystem<L, A> cs) {
-        throw new UnsupportedOperationException("Not supported yet."); // TODO: Implement transitionSystemFromChannelSystem
+        TransitionSystem<Pair<List<L>, Map<String, Object>>, A, String> ts = new TransitionSystemImpl<>();
+        ActionDef actDef = new ParserBasedActDef();
+        ConditionDef condDef = new ParserBasedCondDef();
+        InterleavingActDef handShakesDef = new ParserBasedInterleavingActDef();
+
+        //region INITIAL STATES (COMBINING INITIAL LOCATIONS AND MEMORY)
+        //region location and initialization products
+        /* initial locations product */
+        List<Set<L>> discreteInitialLocations = new LinkedList<>();
+        for (ProgramGraph<L, A> pg : cs.getProgramGraphs())
+            discreteInitialLocations.add(pg.getInitialLocations());
+        Set<List<L>> initialLocations = combine(discreteInitialLocations);
+
+        /* initializations product */
+        List<Set<List<String>>> pgInits = new LinkedList<>();
+        for (ProgramGraph<L, A> pg : cs.getProgramGraphs()) {
+            if (pg.getInitalizations().size() > 0)
+                pgInits.add(pg.getInitalizations());
+        }
+        Set<List<List<String>>> initProducts = combine(pgInits);
+        //endregion
+
+        //region initial memories
+        Set<Map<String, Object>> initialMemoryMaps = new HashSet<>();
+        if (initProducts.size() == 0)
+            initialMemoryMaps.add(new HashMap<>());
+        else for (List<List<String>> singleInitProduct : initProducts) {
+            Map<String, Object> memoryMap = new HashMap<>();
+            for (List<String> singlePgInit : singleInitProduct)
+                for (String init : singlePgInit)
+                    memoryMap = actDef.effect(memoryMap, init);
+            initialMemoryMaps.add(memoryMap);
+        }
+        //endregion
+
+        Set<Pair<List<L>, Map<String, Object>>> initialStates = setProduct(initialLocations, initialMemoryMaps);
+        ts.addAllStates(initialStates);
+        initialStates.forEach(ts::addInitialState);
+        //endregion
+
+        // region REST STATES (REACHABLE)
+        //region transition and action mappings
+        Map<ProgramGraph<L, A>, Map<A, PGTransition<L, A>>> pgToSimultaneousActionsToTransitions = new HashMap<>();
+        Map<ProgramGraph<L, A>, Map<L, Set<PGTransition<L, A>>>> pgToLocationToTransitions = new HashMap<>();
+
+        for (ProgramGraph<L, A> pg : cs.getProgramGraphs())
+            pgToSimultaneousActionsToTransitions.put(pg, new HashMap<>());
+
+        for (ProgramGraph<L, A> pg : cs.getProgramGraphs()) {
+            /* create the mapping of the PG */
+            Map<L, Set<PGTransition<L, A>>> transitionsOfLocations = new HashMap<>();
+            pgToLocationToTransitions.put(pg, transitionsOfLocations);
+
+            /* initialize mappings for locations and put the transitions in the map */
+            for (L l : pg.getLocations())
+                transitionsOfLocations.put(l, new HashSet<>());
+            for (PGTransition<L, A> t : pg.getTransitions()) {
+                transitionsOfLocations.get(t.getFrom()).add(t);
+                if (isSyncronizedChannelAction(t.getAction())) {
+                    pgToSimultaneousActionsToTransitions.get(pg).put(t.getAction(), t);
+                }
+            }
+        }
+
+        List<Pair<ProgramGraph<L, A>, Set<A>>> pgToSimActions = new LinkedList<>();
+        pgToSimultaneousActionsToTransitions.forEach((key, value) -> pgToSimActions.add(new Pair<>(key, value.keySet())));
+        Set<List<Pair<ProgramGraph<L, A>, A>>> simActionsProduct = setProductUsingPairList(pgToSimActions);
+        //endregion
+
+
+        Set<Pair<List<L>, Map<String, Object>>> currentStates = ts.getInitialStates();
+        Set<Pair<List<L>, Map<String, Object>>> nextStates;
+        Set<Transition<Pair<List<L>, Map<String, Object>>, A>> reachableTransitions = new HashSet<>();
+
+        do {
+            nextStates = new HashSet<>();
+            for (Pair<List<L>, Map<String, Object>> currentState : currentStates) {
+                for (int i = 0; i < currentState.first.size(); i++) {
+                    L currentLocationPg = currentState.first.get(i);
+                    ProgramGraph<L, A> pg = cs.getProgramGraphs().get(i);
+
+                    for (PGTransition<L, A> currentTransition : pgToLocationToTransitions.get(pg).get(currentLocationPg)) {
+                        if (condDef.evaluate(currentState.second, currentTransition.getCondition())) {
+                            A currentAction = currentTransition.getAction();
+                            if (isSyncronizedChannelAction(currentAction)) {
+                                //region simultaneous
+                                for (List<Pair<ProgramGraph<L, A>, A>> pgAndSimActions : simActionsProduct) // for each possibility of simultaneous actions
+                                    if (hasActionOfPg(currentAction, pg, pgAndSimActions)) { // only if the possibility refers to the current action
+                                        // pickup some other action and if possible commit both actions together
+                                        for (int j = 0; j < pgAndSimActions.size(); j++) {
+                                            ProgramGraph<L, A> otherPg = pgAndSimActions.get(j).first;
+                                            A otherAction = pgAndSimActions.get(j).second;
+                                            if (!otherPg.equals(pg))
+                                                if (isReadWriteActions(currentAction, otherAction)) {
+                                                    A interleavedAction = interleaveActions(i, j, currentAction, pgAndSimActions.get(j).second);
+                                                    Pair<List<L>, Map<String, Object>> nextState = new Pair<>(
+                                                            cloneAndReplace(
+                                                                    cloneAndReplace(currentState.first, i, currentTransition.getTo()),
+                                                                    j,
+                                                                    pgToSimultaneousActionsToTransitions
+                                                                            .get(otherPg)
+                                                                            .get(otherAction)
+                                                                            .getTo()),
+                                                            handShakesDef.effect(currentState.second, interleavedAction)
+                                                    );
+                                                    nextStates.add(nextState);
+                                                    reachableTransitions.add(new Transition<>(currentState, interleavedAction, nextState));
+                                                }
+                                        }
+                                    }
+                                //endregion
+                            } else
+                                //region non-simultaneous
+                                if (isItReallyPossibleAction(currentState.second, currentTransition.getAction())) {
+                                    Pair<List<L>, Map<String, Object>> nextState = new Pair<>(
+                                            cloneAndReplace(currentState.first, i, currentTransition.getTo()),
+                                            actDef.effect(currentState.second, currentAction)
+                                    );
+
+                                    nextStates.add(nextState);
+                                    reachableTransitions.add(new Transition<>(currentState, currentAction, nextState));
+                                }
+                                //endregion
+                        }
+                    }
+                }
+            }
+
+            //region (loop step)
+            nextStates = difference(nextStates, ts.getStates());
+            ts.addAllStates(nextStates);
+            currentStates = nextStates;
+            //endregion
+        } while (!currentStates.isEmpty());
+        //endregion
+
+        //region TRANSITIONS & ACTIONS
+        // actions
+        for (ProgramGraph<L, A> pg : cs.getProgramGraphs())
+            for (PGTransition<L, A> t : pg.getTransitions())
+                ts.addAction(t.getAction());
+
+        for (Transition<Pair<List<L>, Map<String, Object>>, A> t : reachableTransitions) {
+            ts.addAction(t.getAction());
+            ts.addTransition(t);
+        }
+        //endregion
+
+        //region APS & LABELS
+        for (Pair<List<L>, Map<String, Object>> s : ts.getStates()) {
+            for (L location : s.first) {
+                ts.addAtomicProposition(location.toString());
+                ts.addToLabel(s, location.toString());
+            }
+            for (Map.Entry<String, Object> entry : s.second.entrySet()) {
+                String ap = String.format("%s = %s", entry.getKey(), entry.getValue().toString());
+                ts.addAtomicProposition(ap);
+                ts.addToLabel(s, ap);
+            }
+        }
+        //endregion
+
+        return ts;
+    }
+
+    private <L, A> boolean hasActionOfPg(A action, ProgramGraph<L, A> pg, List<Pair<ProgramGraph<L, A>, A>> simulActions) {
+        for (Pair<ProgramGraph<L, A>, A> pair : simulActions) {
+            if (pair.first.equals(pg))
+                return pair.second.equals(action);
+        }
+        return false;
+    }
+
+    private static <K, T> Set<List<Pair<K, T>>> setProductUsingPairList(Set<List<Pair<K, T>>> s1, Pair<K, Set<T>> s2) {
+        Set<List<Pair<K, T>>> product = new HashSet<>();
+        for (List<Pair<K, T>> l : s1)
+            for (T x : s2.second) {
+                List<Pair<K, T>> newList = new LinkedList<>();
+                newList.addAll(l);
+                newList.add(new Pair<>(s2.first, x));
+                product.add(newList);
+            }
+        return product;
+    }
+    private static <K, T> Set<List<Pair<K, T>>> setProductUsingPairList(List<Pair<K, Set<T>>> sets) {
+        sets = new LinkedList<>(sets);
+        Set<List<Pair<K, T>>> p = new HashSet<>();
+        for (int i = sets.size() - 1; i >= 0; i--)
+            if (sets.get(i).second.isEmpty())
+                sets.remove(i);
+
+        if (sets.isEmpty())
+            return p;
+        Pair<K, Set<T>> firstPair = sets.remove(0);
+        for (T x : firstPair.second) {
+            List<Pair<K, T>> list = new LinkedList<>();
+            list.add(new Pair<>(firstPair.first, x));
+            p.add(list);
+        }
+        while (!sets.isEmpty())
+            p = setProductUsingPairList(p, sets.remove(0));
+
+        return p;
+    }
+
+    private <A> A interleaveActions(int i, int j, A ai, A aj) {
+        if (i < j)
+            return (A) (ai.toString() + "|" + aj.toString());
+        else
+            return (A) (aj.toString() + "|" + ai.toString());
+    }
+
+    private <A> boolean isReadWriteActions(A a1, A a2) {
+        String first = a1.toString();
+        String second = a2.toString();
+
+        if(first.contains("?") && second.contains("!")){
+            String chanName1 = first.split("\\?")[0];
+            String chanName2 = second.split("\\!")[0];
+            return chanName1.equals(chanName2);
+        }
+        if(first.contains("!") && second.contains("?")){
+            String chanName1 = first.split("\\!")[0];
+            String chanName2 = second.split("\\?")[0];
+            return chanName1.equals(chanName2);
+        }
+        return false;
     }
 
     @Override
