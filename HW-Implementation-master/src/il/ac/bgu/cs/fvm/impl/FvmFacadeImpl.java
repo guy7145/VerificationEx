@@ -821,7 +821,6 @@ public class FvmFacadeImpl implements FvmFacade {
         return resultTransitions;
     }
 
-
     @Override
     public <S, A, P, Saut> VerificationResult<S> verifyAnOmegaRegularProperty(TransitionSystem<S, A, P> ts, Automaton<Saut, P> aut) {
         throw new UnsupportedOperationException("Not supported yet."); // TODO: Implement verifyAnOmegaRegularProperty
