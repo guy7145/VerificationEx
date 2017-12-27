@@ -94,4 +94,30 @@ public class Utils {
     private static <A> boolean isChannelRead(A action) {
         return action.toString().contains("?");
     }
+
+    public static class LogicalUtils {
+        public static String parenthesis(String x) {
+            return String.format("(%s)", x);
+        }
+
+        public static String not(String x) {
+            return String.format("!%s", x);
+        }
+
+        public static String or(String x1, String x2) {
+            return String.format("%s || %s", x1, x2);
+        }
+
+        public static String and(String x1, String x2) {
+            return String.format("%s && %s", x1, x2);
+        }
+
+        public static String concatenate(String x1, String x2) {
+            return String.format("%s;%s", x1, x2);
+        }
+
+        public static boolean isNone(String x) {
+            return x.equals("");
+        }
+    }
 }

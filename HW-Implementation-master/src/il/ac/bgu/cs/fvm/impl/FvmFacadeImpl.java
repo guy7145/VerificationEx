@@ -10,12 +10,15 @@ import il.ac.bgu.cs.fvm.circuits.Circuit;
 import il.ac.bgu.cs.fvm.exceptions.ActionNotFoundException;
 import il.ac.bgu.cs.fvm.exceptions.StateNotFoundException;
 import il.ac.bgu.cs.fvm.ltl.LTL;
+import il.ac.bgu.cs.fvm.nanopromela.NanoPromelaFileReader;
+import il.ac.bgu.cs.fvm.nanopromela.NanoPromelaParser;
 import il.ac.bgu.cs.fvm.programgraph.*;
 import il.ac.bgu.cs.fvm.transitionsystem.AlternatingSequence;
 import il.ac.bgu.cs.fvm.transitionsystem.Transition;
 import il.ac.bgu.cs.fvm.transitionsystem.TransitionSystem;
 import il.ac.bgu.cs.fvm.util.Pair;
 import il.ac.bgu.cs.fvm.verification.VerificationResult;
+import il.ac.bgu.cs.fvm.nanopromela.NanoPromelaParser.StmtContext;
 
 import java.io.InputStream;
 import java.util.*;
@@ -25,6 +28,7 @@ import static il.ac.bgu.cs.fvm.impl.CircuitUtils.allOff;
 import static il.ac.bgu.cs.fvm.impl.CircuitUtils.allPermutations;
 import static il.ac.bgu.cs.fvm.impl.CircuitUtils.getTrueNames;
 import static il.ac.bgu.cs.fvm.impl.SetUtils.*;
+import static il.ac.bgu.cs.fvm.impl.Utils.LogicalUtils.*;
 import static il.ac.bgu.cs.fvm.impl.Utils.isSyncronizedChannelAction;
 
 /**
@@ -385,6 +389,8 @@ public class FvmFacadeImpl implements FvmFacade {
                 mem = ActionDef.effect(actionDefs, mem, init);
             initialMemoryMaps.add(mem);
         }
+        if (initialMemoryMaps.isEmpty())
+            initialMemoryMaps.add(new HashMap<>());
         /* initial states */
         for (Pair<L, Map<String, Object>> s : setProduct(pg.getInitialLocations(), initialMemoryMaps)) {
             ts.addState(s);
@@ -573,10 +579,6 @@ public class FvmFacadeImpl implements FvmFacade {
 
         //region TRANSITIONS & ACTIONS
         // actions
-        for (ProgramGraph<L, A> pg : cs.getProgramGraphs())
-            for (PGTransition<L, A> t : pg.getTransitions())
-                ts.addAction(t.getAction());
-
         for (Transition<Pair<List<L>, Map<String, Object>>, A> t : reachableTransitions) {
             ts.addAction(t.getAction());
             ts.addTransition(t);
@@ -671,18 +673,154 @@ public class FvmFacadeImpl implements FvmFacade {
 
     @Override
     public ProgramGraph<String, String> programGraphFromNanoPromela(String filename) throws Exception {
-        throw new UnsupportedOperationException("Not supported yet."); // TODO: Implement programGraphFromNanoPromela
+        return  programGraphFromNanoPromela(NanoPromelaFileReader.pareseNanoPromelaFile(filename));
     }
 
     @Override
     public ProgramGraph<String, String> programGraphFromNanoPromelaString(String nanopromela) throws Exception {
-        throw new UnsupportedOperationException("Not supported yet."); // TODO: Implement programGraphFromNanoPromelaString
+        return  programGraphFromNanoPromela(NanoPromelaFileReader.pareseNanoPromelaString(nanopromela));
     }
 
     @Override
     public ProgramGraph<String, String> programGraphFromNanoPromela(InputStream inputStream) throws Exception {
-        throw new UnsupportedOperationException("Not supported yet."); // TODO: Implement programGraphFromNanoPromela
+        return  programGraphFromNanoPromela(NanoPromelaFileReader.parseNanoPromelaStream(inputStream));
     }
+
+    private ProgramGraph<String, String> programGraphFromNanoPromela(StmtContext sc) {
+        ProgramGraph<String, String> pg= createProgramGraph();
+        List<PGTransition<String,String>> transitions = generateTransitionsFromStatements(sc,false);
+
+        pg.addInitialLocation(sc.getText());
+        for (PGTransition<String,String> tran: transitions) {
+            if(!isNone(tran.getFrom()))
+                pg.addLocation(tran.getFrom());
+
+            pg.addLocation(tran.getTo());
+            pg.addTransition(tran);
+        }
+        return pg;
+    }
+
+    private List<PGTransition<String,String>> generateTransitionsFromStatements(StmtContext root, boolean ifStatementHappend) {
+        List<PGTransition<String, String>> resultTransitions = new ArrayList<>();
+        //region basic case
+        if(root.assstmt() != null || root.skipstmt() != null || root.atomicstmt() != null || root.chanreadstmt() != null || root.chanwritestmt() != null){
+ 			/* The sub statements are only <root> and <exit> */
+            if(ifStatementHappend) {
+                String action = root.getText();
+                PGTransition<String, String> pgTrans = new PGTransition<>("","",action,"");
+                resultTransitions.add(pgTrans);
+            } else {
+                String from = root.getText();
+                PGTransition<String, String> pgTrans = new PGTransition<>(from,"",from,"");
+                resultTransitions.add(pgTrans);
+            }
+            return resultTransitions;
+        }
+        //endregion
+        //region if-statement
+        NanoPromelaParser.IfstmtContext ifstmt;
+        if((ifstmt = root.ifstmt())!=null){
+			/* The sub-statements are [root], [exit], and the sub-statements of all op.stmt() where opis a member of root.ifstmt().option()*/
+            for(NanoPromelaParser.OptionContext oc : ifstmt.option()){
+                List<PGTransition<String, String>> subTransToAdd;
+                subTransToAdd = generateTransitionsFromStatements(oc.stmt(), true);
+                for(PGTransition<String, String> pgTrans : subTransToAdd){
+                    if(!ifStatementHappend){
+                        if(isNone(pgTrans.getFrom()))
+                            pgTrans.setFrom(ifstmt.getText());
+                    }
+                    if(pgTrans.getFrom().equals(ifstmt.getText()) || isNone(pgTrans.getFrom())){
+                        if(isNone(pgTrans.getCondition()))
+                            pgTrans.setCondition(parenthesis(oc.boolexpr().getText()));
+                        else pgTrans.setCondition(and(parenthesis(oc.boolexpr().getText()), parenthesis(pgTrans.getCondition())));
+                    }
+                }
+                resultTransitions.addAll(subTransToAdd);
+            }
+            return resultTransitions;
+        }
+        //endregion
+        //region do-statement
+        NanoPromelaParser.DostmtContext dostmt;
+        if((dostmt = root.dostmt()) != null) {
+			/* The sub-statements are [root], [exit], and locations [;root] where is a sub-statement of some opin root.dostmt().option() */
+            String loop = dostmt.getText();
+            PGTransition<String, String> exitdo = new PGTransition<>("","","","");
+            for(NanoPromelaParser.OptionContext oc : dostmt.option()) {
+                List<PGTransition<String, String>> subTransToAdd;
+                subTransToAdd = generateTransitionsFromStatements(oc.stmt(), true);
+                for(PGTransition<String, String> pgTrans : subTransToAdd) {
+                    if(ifStatementHappend) {
+                        if(!isNone(pgTrans.getFrom()))
+                            pgTrans.setFrom(concatenate(pgTrans.getFrom(), loop));
+                    } else {
+                        if(isNone(pgTrans.getFrom()))
+                            pgTrans.setFrom(loop);
+                        else
+                            pgTrans.setFrom(concatenate(pgTrans.getFrom(), loop));
+                    }
+                    if(pgTrans.getFrom().equals(loop) || isNone(pgTrans.getFrom())) {
+                        if(isNone(pgTrans.getCondition()))
+                            pgTrans.setCondition(parenthesis(oc.boolexpr().getText()));
+                        else
+                            pgTrans.setCondition(and(parenthesis(oc.boolexpr().getText()), parenthesis(pgTrans.getCondition())));
+                    }
+
+                    if(isNone(pgTrans.getTo()))
+                        pgTrans.setTo(loop);
+                    else
+                        pgTrans.setTo(concatenate(pgTrans.getTo(),loop));
+                }
+
+                if(isNone(exitdo.getCondition()))
+                    exitdo.setCondition(parenthesis(oc.boolexpr().getText()));
+                else
+                    exitdo.setCondition(or(exitdo.getCondition(), parenthesis(oc.boolexpr().getText())));
+
+                resultTransitions.addAll(subTransToAdd);
+                for(PGTransition<String, String> pgTrans : subTransToAdd) {
+                    if(isNone(pgTrans.getFrom())) {
+                        PGTransition<String, String> newPGT = new PGTransition<>(loop,pgTrans.getCondition(),pgTrans.getAction(),pgTrans.getTo());
+                        resultTransitions.add(newPGT);
+                    }
+                }
+            }
+
+            exitdo.setCondition(not(parenthesis(exitdo.getCondition())));
+            if(ifStatementHappend)
+                resultTransitions.add(exitdo);
+
+            PGTransition<String, String> exitdo2 = new PGTransition<>(loop,exitdo.getCondition(),"","");
+            resultTransitions.add(exitdo2);
+            return resultTransitions;
+        }
+        //endregion
+        //region list of statements
+        List<StmtContext> stmts;
+        if((stmts = root.stmt())!= null){
+            /* The sub-statements are the union of locations of the form[;root.stmt(1)] where is a sub-statement ofroot.stmt(0)and of all the sub-statements of root.stmt(1)*/
+            String stmt2 = stmts.get(1).getText();
+            List<PGTransition<String, String>> subStmtTrans1 = generateTransitionsFromStatements(stmts.get(0), ifStatementHappend);
+            for(PGTransition<String, String> trans : subStmtTrans1){
+                if(!ifStatementHappend || !isNone(trans.getFrom()))
+                    trans.setFrom(concatenate(trans.getFrom(), stmt2));
+
+                if(isNone(trans.getTo())){
+                    trans.setTo(stmt2);
+                }
+                else trans.setTo(concatenate(trans.getTo(), stmt2));
+            }
+
+            resultTransitions.addAll(subStmtTrans1);
+            List<PGTransition<String, String>> subStmtTrans2 = generateTransitionsFromStatements(stmts.get(1), false);
+            resultTransitions.addAll(subStmtTrans2);
+            return resultTransitions;
+        }
+        //endregion
+        return resultTransitions;
+    }
+
 
     @Override
     public <S, A, P, Saut> VerificationResult<S> verifyAnOmegaRegularProperty(TransitionSystem<S, A, P> ts, Automaton<Saut, P> aut) {
