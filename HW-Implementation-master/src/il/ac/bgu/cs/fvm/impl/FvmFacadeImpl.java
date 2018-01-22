@@ -17,8 +17,10 @@ import il.ac.bgu.cs.fvm.transitionsystem.AlternatingSequence;
 import il.ac.bgu.cs.fvm.transitionsystem.Transition;
 import il.ac.bgu.cs.fvm.transitionsystem.TransitionSystem;
 import il.ac.bgu.cs.fvm.util.Pair;
+import il.ac.bgu.cs.fvm.verification.VerificationFailed;
 import il.ac.bgu.cs.fvm.verification.VerificationResult;
 import il.ac.bgu.cs.fvm.nanopromela.NanoPromelaParser.StmtContext;
+import il.ac.bgu.cs.fvm.verification.VerificationSucceeded;
 
 import java.io.InputStream;
 import java.util.*;
@@ -668,8 +670,51 @@ public class FvmFacadeImpl implements FvmFacade {
 
     @Override
     public <Sts, Saut, A, P> TransitionSystem<Pair<Sts, Saut>, A, Saut> product(TransitionSystem<Sts, A, P> ts, Automaton<Saut, P> aut) {
-        throw new UnsupportedOperationException("Not supported yet."); // TODO: Implement product
+        TransitionSystem<Pair<Sts, Saut>, A, Saut> result = createTransitionSystem();
+
+        for (Sts s1 : ts.getStates())
+            for (Saut s2 : aut.getTransitions().keySet())
+                result.addState(new Pair<>(s1, s2));
+
+        for (Sts s1 : ts.getInitialStates())
+            for (Saut s2 : aut.getInitialStates())
+                for (Saut s3 : aut.getTransitions().get(s2).get(ts.getLabel(s1)))
+                    result.addInitialState(new Pair<>(s1, s3));
+
+        result.addAllActions(ts.getActions());
+
+        for (Transition<Sts, A> t : ts.getTransitions())
+            for (Saut s1 : aut.getTransitions().keySet())
+                if (aut.getTransitions().get(s1).get(ts.getLabel(t.getTo())) != null)
+                    for (Saut s2 : aut.getTransitions().get(s1).get(ts.getLabel(t.getTo())))
+                        result.addTransitionFrom(new Pair<>(t.getFrom(), s1)).action(t.getAction()).to(new Pair<>(t.getTo(), s2));
+
+        removeUnreachableStates(result);
+
+        result.getStates().forEach(s -> {
+            result.addAtomicProposition(s.second);
+            result.addToLabel(s, s.second);
+        });
+
+        return result;
     }
+
+    private <S1, S2, A, P> void removeUnreachableStates(TransitionSystem<Pair<S1, S2>, A, P> ts) {
+        Set<Pair<S1,S2>> reachable = reach(ts);
+        Set<Pair<S1,S2>> removeStates = new HashSet<>();
+        for (Pair<S1,S2> s : ts.getStates())
+            if (!reachable.contains(s)) {
+                Set<Transition<Pair<S1, S2>, A>> removeTransition = new HashSet<>();
+                for (Transition<Pair<S1, S2>, A> t : ts.getTransitions())
+                    if (s.equals(t.getFrom()) || s.equals(t.getTo()))
+                        removeTransition.add(t);
+                removeTransition.forEach(ts::removeTransition);
+                ts.getLabel(s).forEach(p -> ts.removeLabel(s, p));
+                removeStates.add(s);
+            }
+        removeStates.forEach(ts::removeState);
+    }
+
 
     @Override
     public ProgramGraph<String, String> programGraphFromNanoPromela(String filename) throws Exception {
@@ -823,7 +868,60 @@ public class FvmFacadeImpl implements FvmFacade {
 
     @Override
     public <S, A, P, Saut> VerificationResult<S> verifyAnOmegaRegularProperty(TransitionSystem<S, A, P> ts, Automaton<Saut, P> aut) {
-        throw new UnsupportedOperationException("Not supported yet."); // TODO: Implement verifyAnOmegaRegularProperty
+        TransitionSystem<Pair<S, Saut>, A, Saut> p = product(ts, aut);
+        for (Pair<S, Saut> state : p.getStates())
+            for (Saut label : p.getLabel(state))
+                if (aut.getAcceptingStates().contains(label) && isInCycle(p, state))
+                    return verificationFailed(p, state);
+        return new VerificationSucceeded<>();
+    }
+
+    private <S, Saut> VerificationResult<S> verificationFailed(TransitionSystem<Pair<S, Saut>, ?, Saut> p, Pair<S, Saut> state) {
+        VerificationFailed<S> fail = new VerificationFailed<>();
+        fail.setCycle(getFirsts(getStateCycle(p, state)));
+        fail.setPrefix(getFirsts(getStatePrefix(p, state)));
+        return fail;
+    }
+
+    private <S> boolean isInCycle(TransitionSystem<S, ?, ?> ts, S s) {
+        Set<S> reachable = new HashSet<>();
+        Set<S> expanded = new HashSet<>(post(ts, s));
+        while (!reachable.equals(expanded)) expanded.addAll(post(ts, (reachable = new HashSet<>(expanded))));
+        return reachable.contains(s);
+    }
+
+    private <S> List<S> getStateCycle(TransitionSystem<S, ?, ?> ts, S s) {
+        List<List<S>> paths = new ArrayList<>();
+        paths.add(Collections.singletonList(s));
+        return getStatePaths(ts, s, paths, new HashSet<>());
+    }
+
+    private <S> List<S> getStatePrefix(TransitionSystem<S, ?, ?> ts, S s) {
+        List<List<S>> paths = new ArrayList<>();
+        ts.getInitialStates().forEach(state -> paths.add(Collections.singletonList(state)));
+        return getStatePaths(ts, s, paths, new HashSet<>(ts.getInitialStates()));
+    }
+
+    private <S> List<S> getStatePaths(TransitionSystem<S, ?, ?> ts, S s, List<List<S>> paths, Set<S> visited) {
+        List<S> ans = null;
+        while (!visited.contains(s) && !paths.isEmpty()) {
+            List<S> path = paths.remove(0);
+            for (S state : post(ts, path.get(path.size() - 1))) {
+                if (!visited.add(state)) continue;
+                if (!s.equals(state)) {
+                    List<S> temp = new ArrayList<>(path);
+                    temp.add(state);
+                    paths.add(temp);
+                } else ans = path;
+            }
+        }
+        return ans;
+    }
+
+    private <S, Saut> List<S> getFirsts(List<Pair<S, Saut>> list) {
+        List<S> res = new ArrayList<>();
+        list.forEach(p -> res.add(p.first));
+        return res;
     }
 
     @Override
