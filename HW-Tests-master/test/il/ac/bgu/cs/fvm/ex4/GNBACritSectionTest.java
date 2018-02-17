@@ -56,7 +56,7 @@ public class GNBACritSectionTest {
 
 		aut.addTransition("s01", crit2, "s21");
 		aut.addTransition("s01", crit1, "s11");
-		aut.addTransition("s02", crit2, "a22");
+		aut.addTransition("s02", crit2, "s22");
 		aut.addTransition("s02", crit1, "s12");
 
 		// True transitions
@@ -66,7 +66,7 @@ public class GNBACritSectionTest {
 			aut.addTransition("s02", s, "s02");
 			aut.addTransition("s21", s, "s01");
 			aut.addTransition("s12", s, "s02");
-			aut.addTransition("a22", s, "s01");
+			aut.addTransition("s22", s, "s01");
 		}
 
 		aut.setInitial("s01");

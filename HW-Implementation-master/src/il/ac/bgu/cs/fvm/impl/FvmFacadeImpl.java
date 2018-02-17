@@ -9,7 +9,7 @@ import il.ac.bgu.cs.fvm.channelsystem.ParserBasedInterleavingActDef;
 import il.ac.bgu.cs.fvm.circuits.Circuit;
 import il.ac.bgu.cs.fvm.exceptions.ActionNotFoundException;
 import il.ac.bgu.cs.fvm.exceptions.StateNotFoundException;
-import il.ac.bgu.cs.fvm.ltl.LTL;
+import il.ac.bgu.cs.fvm.ltl.*;
 import il.ac.bgu.cs.fvm.nanopromela.NanoPromelaFileReader;
 import il.ac.bgu.cs.fvm.nanopromela.NanoPromelaParser;
 import il.ac.bgu.cs.fvm.programgraph.*;
@@ -17,6 +17,7 @@ import il.ac.bgu.cs.fvm.transitionsystem.AlternatingSequence;
 import il.ac.bgu.cs.fvm.transitionsystem.Transition;
 import il.ac.bgu.cs.fvm.transitionsystem.TransitionSystem;
 import il.ac.bgu.cs.fvm.util.Pair;
+import il.ac.bgu.cs.fvm.util.Util;
 import il.ac.bgu.cs.fvm.verification.VerificationFailed;
 import il.ac.bgu.cs.fvm.verification.VerificationResult;
 import il.ac.bgu.cs.fvm.nanopromela.NanoPromelaParser.StmtContext;
@@ -383,7 +384,7 @@ public class FvmFacadeImpl implements FvmFacade {
     public <L, A> TransitionSystem<Pair<L, Map<String, Object>>, A, String> transitionSystemFromProgramGraph(ProgramGraph<L, A> pg, Set<ActionDef> actionDefs, Set<ConditionDef> conditionDefs) {
         TransitionSystem<Pair<L, Map<String, Object>>, A, String> ts = createTransitionSystem();
         Map<String, Object> initialMemory = new HashMap<>();
-        /* initial memory mapping */
+        // region initial memory mapping
         Set<Map<String, Object>> initialMemoryMaps = new HashSet<>();
         for (List<String> initList : pg.getInitalizations()) {
             Map<String, Object> mem = new HashMap<>();
@@ -393,12 +394,14 @@ public class FvmFacadeImpl implements FvmFacade {
         }
         if (initialMemoryMaps.isEmpty())
             initialMemoryMaps.add(new HashMap<>());
-        /* initial states */
+        // endregion
+        // region initial states
         for (Pair<L, Map<String, Object>> s : setProduct(pg.getInitialLocations(), initialMemoryMaps)) {
             ts.addState(s);
             ts.addInitialState(s);
         }
-        /* rest states (reachable) */
+        // endregion
+        // region rest states (reachable)
         Set<Pair<L, Map<String, Object>>> currentStates = ts.getInitialStates();
         Set<Pair<L, Map<String, Object>>> nextStates;
         Set<Transition<Pair<L, Map<String, Object>>, A>> transitions = new HashSet<>();
@@ -421,14 +424,14 @@ public class FvmFacadeImpl implements FvmFacade {
             ts.addAllStates(nextStates);
             currentStates = nextStates;
         } while (!currentStates.isEmpty());
-
-        /* transitions and actions */
+        // endregion
+        // region transitions and actions
         for (Transition<Pair<L, Map<String, Object>>, A> t : transitions) {
             ts.addAction(t.getAction());
             ts.addTransition(t);
         }
-
-        /* aps and labels */
+        // endregion
+        // region aps and labels
         for (Pair<L, Map<String, Object>> s : ts.getStates()) {
             ts.addAtomicProposition(s.first.toString());
             ts.addToLabel(s, s.first.toString());
@@ -438,6 +441,7 @@ public class FvmFacadeImpl implements FvmFacade {
                 ts.addToLabel(s, ap);
             }
         }
+        // endregion
         return ts;
     }
 
@@ -926,13 +930,248 @@ public class FvmFacadeImpl implements FvmFacade {
 
     @Override
     public <L> Automaton<?, L> LTL2NBA(LTL<L> ltl) {
-        throw new UnsupportedOperationException("Not supported yet."); // TODO: Implement LTL2NBA
+        MultiColorAutomaton<Set<LTL<L>>,L> gnba = new MultiColorAutomaton<>();
+        Set<LTL<L>> sub = generateSubOfLtl(ltl);
+        Set<Set<LTL<L>>> basicStates = getBasicStates(Util.powerSet(sub), sub);
+        Set<Set<LTL<L>>> initialStates = getInitialSets(ltl, basicStates);
+
+        Set<Set<LTL<L>>> autoStates = new HashSet<>(initialStates);
+
+        Queue<Set<LTL<L>>> unscannedStates = new LinkedList<>(initialStates);
+        while(!unscannedStates.isEmpty()) {
+            Set<LTL<L>> srcState = unscannedStates.remove();
+
+            Set<L> action = new HashSet<>();
+            for (LTL<L> innerExpression : srcState)
+                if (innerExpression instanceof AP)
+                    action.add(((AP<L>) innerExpression).getName());
+
+            for (Set<LTL<L>> targetState : basicStates) {
+                if (sub.stream().allMatch(expression -> {
+                    if (expression instanceof Next) {
+                        Next<L> next = (Next<L>) expression;
+                        return srcState.contains(next) == targetState.contains(next.getInner());
+                    }
+                    else {
+                        return !(expression instanceof Until) ||
+                                srcState.contains(expression) == (srcState.contains(((Until) expression).getRight()) ||
+                                        (srcState.contains(((Until) expression).getLeft()) && targetState.contains(expression)));
+                    }})) {
+                    gnba.addTransition(srcState, action, targetState);
+                    if (!autoStates.contains(targetState)) {
+                        gnba.addState(targetState);
+                        autoStates.add(targetState);
+                        unscannedStates.add(targetState);
+                    }
+                }
+            }
+        }
+
+        for (Set<LTL<L>> state : initialStates) {
+            gnba.addState(state);
+            gnba.setInitial(state);
+        }
+
+        int color = 0;
+        for(LTL exp : sub){
+            if(exp instanceof Until){
+                Until until = (Until) exp;
+                for (Set<LTL<L>> state : autoStates)
+                    if(state.contains(until.getRight()) || !state.contains(until))
+                        gnba.setAccepting(state, color);
+                color++;
+            }
+        }
+        if(0 == color) autoStates.forEach(s -> gnba.setAccepting(s,0));
+        return GNBA2NBA(gnba);
     }
+
+    private <L> Set<Set<LTL<L>>> getInitialSets(LTL<L> initialExpression, Set<Set<LTL<L>>> allStates) {
+        Set<Set<LTL<L>>> initialStates = new HashSet<>();
+        for (Set<LTL<L>> state : allStates)
+            if(state.contains(initialExpression))
+                initialStates.add(state);
+        return initialStates;
+    }
+
+    private <L> Set<Set<LTL<L>>> getBasicStates(Set<Set<LTL<L>>> allStates, Set<LTL<L>> sub) {
+        Set<Set<LTL<L>>> basicStates = new HashSet<>();
+        for (Set<LTL<L>> s : allStates)
+            if(isBasicState(s, sub))
+                basicStates.add(s);
+
+        return basicStates;
+    }
+
+    private <L> boolean isBasicState(Set<LTL<L>> state, Set<LTL<L>> sub) {
+        for(LTL<L> ltl : sub) {
+            // region until
+            if(ltl instanceof Until){
+                if (!isStateLocalPersistent(state, (Until<L>) ltl)) return false;
+            }
+            // endregion
+            // region and
+            if (ltl instanceof And) {
+                And<L> and = (And<L>) ltl;
+                boolean containsParent = state.contains(and);
+                boolean containsChildren = state.contains(and.getLeft()) && state.contains(and.getRight());
+                if (containsParent != containsChildren)
+                    return false;
+            }
+            // endregion
+            // region true & check for contradictions
+            if (ltl instanceof TRUE) {
+                if(!state.contains(ltl))
+                    return false;
+            } else {
+                LTL<L> not;
+                if (ltl instanceof Not)
+                    not = ((Not<L>) ltl).getInner();
+                else not = LTL.not(ltl);
+
+                if ((!state.contains(ltl) && !state.contains(not)) || state.contains(ltl) && state.contains(not))
+                    return false;
+            }
+            // endregion
+        }
+        return true;
+    }
+
+    private <L> boolean isStateLocalPersistent(Set<LTL<L>> state, Until<L> until) {
+        if(state.contains(until.getRight())
+                && !state.contains(until)) return false;
+
+        if(!state.contains(until.getLeft())
+                && state.contains(until)
+                && !state.contains(until.getRight())) return false;
+
+        return true;
+    }
+
+    private <L> Set<LTL<L>> generateSubOfLtl(LTL<L> ltlFormula) {
+        Set<LTL<L>> result = new HashSet<>();
+        generateSubOfLtl(ltlFormula, result);
+        return result;
+    }
+
+    private <L> void generateSubOfLtl(LTL<L> ltlFormula, Set<LTL<L>> accumulator) {
+        if (accumulator.contains(ltlFormula))
+            return;
+
+        accumulator.add(ltlFormula);
+
+        if(!(ltlFormula instanceof Not))
+            accumulator.add(LTL.not(ltlFormula));
+
+        if (ltlFormula instanceof Not)
+            generateSubOfLtl(((Not<L>) ltlFormula).getInner(), accumulator);
+        else if (ltlFormula instanceof Next)
+            generateSubOfLtl(((Next<L>) ltlFormula).getInner(), accumulator);
+        else if (ltlFormula instanceof Until) {
+            generateSubOfLtl(((Until<L>) ltlFormula).getLeft(), accumulator);
+            generateSubOfLtl(((Until<L>) ltlFormula).getRight(), accumulator);
+        } else if (ltlFormula instanceof And) {
+            generateSubOfLtl(((And<L>) ltlFormula).getLeft(), accumulator);
+            generateSubOfLtl(((And<L>) ltlFormula).getRight(), accumulator);
+        }
+    }
+
 
     @Override
     public <L> Automaton<?, L> GNBA2NBA(MultiColorAutomaton<?, L> mulAut) {
-        throw new UnsupportedOperationException("Not supported yet."); // TODO: Implement GNBA2NBA
+        Automaton<Pair<?, Integer>, L> nba = new Automaton<>();
+        if (mulAut.getColors().isEmpty())
+            return nba;
+
+        Map<Object, Pair<Object, Integer>> firstColorGnbaToNbaStates = null;
+        Set<Object> gnbaNonInitialStates = difference(getAllStates(mulAut), (Set<Object>)mulAut.getInitialStates());
+        Set<Pair<Object, Integer>> lastAcceptingStates = null;
+
+        for (int color : mulAut.getColors()) {
+            Set<Pair<Object, Integer>> nbaAcceptingStates  = setProduct((Set<Object>)mulAut.getAcceptingStates(color), NewSet(color));
+            Set<Pair<Object, Integer>> nbaRestStates = setProduct(
+                    difference(
+                            getAllStates(mulAut),
+                            (Set<Object>)mulAut.getAcceptingStates(color)
+                    ),
+                    NewSet(color)
+            );
+
+            // region gnba-state to nba-state mapping setup
+            Map<Object, Pair<Object, Integer>> gnbaToNbaStates = new HashMap<>();
+            for (Pair<Object, Integer> nbaState : union(nbaRestStates, nbaAcceptingStates))
+                gnbaToNbaStates.put(nbaState.first, nbaState);
+            // endregion
+
+            if (lastAcceptingStates == null) {
+                firstColorGnbaToNbaStates = gnbaToNbaStates;
+
+                // region first color initial and accepting states
+                for (Object s : mulAut.getInitialStates()) {
+                    Pair<?, Integer> nbaState = gnbaToNbaStates.get(s);
+                    nba.addState(nbaState);
+                    nba.setInitial(nbaState);
+                }
+                for (Pair<Object, Integer> s : nbaAcceptingStates) {
+                    nba.addState(s);
+                    nba.setAccepting(s);
+                }
+                // endregion
+            }
+
+            // region transitions (including transitions between accepting color i and color i+1)
+            if (lastAcceptingStates != null)
+                nbaRestStates = union(lastAcceptingStates, nbaRestStates);
+
+            for (Pair<Object, Integer> srcNbaState : nbaRestStates) {
+                Object srcState = srcNbaState.first;
+                Set<Set<L>> actions = mulAut.getTransitions().get(srcState).keySet();
+                for (Set<L> action : actions)
+                    for (Object targetState : mulAut.getTransitions().get(srcState).get(action)) {
+                        nba.addTransition(srcNbaState, action, gnbaToNbaStates.get(targetState));
+                    }
+            }
+            // endregion
+            lastAcceptingStates = nbaAcceptingStates;
+        }
+
+        for (Pair<Object, Integer> srcNbaState : lastAcceptingStates) {
+            Object srcState = srcNbaState.first;
+            Set<Set<L>> actions = mulAut.getTransitions().get(srcState).keySet();
+            for (Set<L> action : actions)
+                for (Object targetState : mulAut.getTransitions().get(srcState).get(action)) {
+                    int i = 0;
+                    nba.addTransition(srcNbaState, action, firstColorGnbaToNbaStates.get(targetState));
+                }
+        }
+
+        return nba;
     }
 
-   
+    private <L> Set<Object> getAllStates(MultiColorAutomaton<?, L> mulAut) {
+        Set<Object> allStates = new HashSet<>();
+        Set<Object> currentStates = new HashSet<>(mulAut.getInitialStates());
+        Set<Object> nextStates;
+
+        // get next states
+        do {
+            nextStates = new HashSet<>();
+            for (Object state : currentStates) {
+                for (Set<?> states : mulAut.getTransitions().get(state).values())
+                    nextStates.addAll(states);
+                nextStates.removeAll(allStates);
+            }
+            allStates.addAll(currentStates);
+            currentStates = nextStates;
+        } while (!nextStates.isEmpty());
+
+        return allStates;
+    }
+
+    private <T> Iterable<T> chain(Collection<T>... collections) {
+        LinkedList<T> list = new LinkedList<>();
+        for (Collection<T> c : collections)
+            list.addAll(c);
+        return list;
+    }
 }
